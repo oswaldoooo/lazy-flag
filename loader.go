@@ -2,6 +2,7 @@ package lazyflag
 
 import (
 	"encoding"
+	"errors"
 	"reflect"
 	"strconv"
 	"strings"
@@ -287,10 +288,10 @@ var (
 	}
 )
 
-func StringLoad(getter func(string) string, loader *LoaderAttr, v any) error {
-	return stringload(getter, loader, reflect.ValueOf(v))
+func StringLoad(getter func(string) string, loader *LoaderAttr, v any, alias Alias) error {
+	return stringload(getter, loader, reflect.ValueOf(v), alias)
 }
-func stringload(getter func(string) string, loader *LoaderAttr, vvl reflect.Value) error {
+func stringload(getter func(string) string, loader *LoaderAttr, vvl reflect.Value, alias Alias) error {
 	vtp := vvl.Type()
 	if vtp.Kind() == reflect.Pointer {
 		vtp = vtp.Elem()
@@ -308,7 +309,7 @@ func stringload(getter func(string) string, loader *LoaderAttr, vvl reflect.Valu
 		if len(name) == 0 {
 			name = loader.wordTranslate(field.Name)
 		}
-		strval := getter(name)
+		strval := getter(alias.Get(name))
 		if len(strval) == 0 {
 			continue
 		}
@@ -371,4 +372,82 @@ func parseFloat(bitsize int) func(string) (float64, error) {
 	return func(s string) (float64, error) {
 		return strconv.ParseFloat(s, bitsize)
 	}
+}
+
+func ObjectBind(src map[string]any, dst any, attr *LoaderAttr, alias Alias) error {
+	ctx := newcontext()
+	ctx.set("root", []string{})
+	return objectbind(ctx, src, reflect.ValueOf(dst), attr, alias)
+}
+
+func objectbind(ctx *context, src map[string]any, dst reflect.Value, attr *LoaderAttr, alias Alias) error {
+	vtp := dst.Type()
+	if vtp.Kind() == reflect.Pointer {
+		vtp = vtp.Elem()
+		dst = dst.Elem()
+	}
+	if vtp.Kind() != reflect.Struct {
+		panic("v is not struct")
+	}
+	fieldcount := vtp.NumField()
+	for i := 0; i < fieldcount; i++ {
+		field := vtp.Field(i)
+		fieldv := dst.Field(i)
+		if !fieldv.CanSet() {
+			continue
+		}
+		name := field.Tag.Get(attr.tagName)
+		if len(name) == 0 {
+			name = attr.wordTranslate(field.Name)
+		}
+		// strval := getter(alias.Get(name))
+		raw, ok := src[alias.Get(strings.Join(append(ctx.get("root").([]string), name), "."))]
+		if !ok || raw == nil {
+			continue
+		}
+		rawvl := reflect.ValueOf(raw)
+		rawtp := rawvl.Type()
+		if rawtp.ConvertibleTo(field.Type) {
+			fieldv.Set(rawvl.Convert(field.Type))
+		} else {
+			switch fieldv.Kind() {
+			case reflect.String:
+				if fieldv.CanAddr() {
+					u, ok := fieldv.Addr().Interface().(encoding.TextUnmarshaler)
+					if ok {
+						err := u.UnmarshalText([]byte(raw.(string)))
+						if err != nil {
+							return err
+						}
+					}
+				}
+				return errors.New("type not match need " + field.Type.Kind().String() + " provide string")
+			case reflect.Struct:
+				v, ok := raw.(map[string]any)
+				if !ok {
+					vv, ok := raw.(map[any]any)
+					if !ok {
+						return errors.New("unsupport " + rawtp.Kind().String())
+					}
+					v = mapTranslate(vv)
+				}
+				root_path := ctx.get("root").([]string)
+				root_path = append(root_path, name)
+				ctx.set("root", root_path)
+				objectbind(ctx, v, fieldv, attr, alias)
+			default:
+				return errors.New("unsupport " + rawtp.Kind().String())
+			}
+		}
+	}
+	return nil
+}
+
+// support for yaml
+func mapTranslate(src map[any]any) (dst map[string]any) {
+	dst = make(map[string]any, len(src))
+	for k, v := range src {
+		dst[k.(string)] = v
+	}
+	return
 }

@@ -1,6 +1,8 @@
 package lazyflag
 
-import "strings"
+import (
+	"strings"
+)
 
 // example: HelloWorld => hello_world
 func camel2hungarian(s string) string {
@@ -27,4 +29,24 @@ func camel2hungarian(s string) string {
 		raw = append(raw, s[last_index:])
 	}
 	return strings.ToLower(strings.Join(raw, "_"))
+}
+
+type Alias map[string]string
+
+func (a Alias) Get(key string) string {
+	if a == nil {
+		return trimSymbol(key)
+	}
+	v, ok := a[key]
+	if ok {
+		return v
+	}
+	return trimSymbol(key)
+}
+func trimSymbol(s string) string {
+	index := strings.LastIndexByte(s, '.')
+	if index < 0 {
+		return s
+	}
+	return s[index+1:]
 }
